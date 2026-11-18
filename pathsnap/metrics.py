@@ -40,6 +40,29 @@ def top1_accuracy(chosen: pd.DataFrame) -> float:
     return float((chosen["arc_id"] == chosen["true_arc"]).mean())
 
 
+def route_overlap(pred_route, true_route, arc_len: np.ndarray) -> dict:
+    """Length-weighted overlap between predicted and reference routes (unique arcs).
+    precision = share of predicted length that is on the reference route,
+    recall    = share of reference length that was predicted."""
+    pred, true = set(map(int, pred_route)), set(map(int, true_route))
+    inter = sum(arc_len[a] for a in pred & true)
+    p_len = sum(arc_len[a] for a in pred)
+    t_len = sum(arc_len[a] for a in true)
+    prec = inter / p_len if p_len else 0.0
+    rec = inter / t_len if t_len else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+    return {"route_precision": prec, "route_recall": rec, "route_f1": f1}
+
+
+def sequence_continuity(point_arcs: np.ndarray, arcs: np.ndarray) -> float:
+    """Share of consecutive points whose arcs are the same or directly connected."""
+    a = np.asarray(point_arcs)
+    if len(a) < 2:
+        return 1.0
+    prev, cur = a[:-1], a[1:]
+    return float(((prev == cur) | (arcs[prev, 1] == arcs[cur, 0])).mean())
+
+
 _ARCS_CACHE: dict[str, np.ndarray] = {}
 
 

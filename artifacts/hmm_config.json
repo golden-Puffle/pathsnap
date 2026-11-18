@@ -1,0 +1,6 @@
+{
+  "beta": 2.0,
+  "emission_weight": 1.0,
+  "max_route_m": 500.0,
+  "backward_tol_m": 15.0
+}
