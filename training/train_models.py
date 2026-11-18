@@ -23,6 +23,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -46,7 +48,21 @@ MODELS = {
         n_estimators=400, learning_rate=0.05, num_leaves=63,
         subsample=0.8, subsample_freq=1, colsample_bytree=0.8,
         random_state=SEED, n_jobs=-1, verbose=-1)),
+    "knn": ("Instance-based", lambda: make_pipeline(
+        StandardScaler(),
+        KNeighborsClassifier(n_neighbors=25, weights="distance", n_jobs=-1))),
+    "mlp": ("Neural network", lambda: make_pipeline(
+        StandardScaler(),
+        MLPClassifier(hidden_layer_sizes=(64, 32), activation="relu", alpha=1e-4,
+                      batch_size=1024, learning_rate_init=1e-3, max_iter=60,
+                      early_stopping=True, validation_fraction=0.1, n_iter_no_change=6,
+                      random_state=SEED))),
 }
+
+
+# KNN stores every training row and compares each prediction against all of
+# them, so its prediction time grows with training size: cap it lower.
+MAX_TRAIN_ROWS_OVERRIDE = {"knn": 100_000}
 
 
 def subsample(df: pd.DataFrame, max_rows: int, seed: int = SEED) -> pd.DataFrame:
@@ -96,9 +112,10 @@ def main():
 
     for name in args.models:
         family = MODELS[name][0]
-        print(f"\n=== {name} ({family})")
+        max_rows = min(args.max_train_rows, MAX_TRAIN_ROWS_OVERRIDE.get(name, args.max_train_rows))
+        print(f"\n=== {name} ({family}), train rows per fit <= {max_rows:,}")
         for fold, (tr_idx, va_idx) in enumerate(gkf.split(train, groups=train["trip_id"])):
-            tr = subsample(train.iloc[tr_idx], args.max_train_rows)
+            tr = subsample(train.iloc[tr_idx], max_rows)
             va = train.iloc[va_idx]
             _, proba, fit_s, infer_s = fit_predict(name, tr, va)
             m = evaluate(va, proba, args.data)
@@ -108,9 +125,10 @@ def main():
                   f"top1={m['top1_acc']:.4f} fit={fit_s:.1f}s")
 
         cv = pd.DataFrame([r for r in fold_rows if r["model"] == name])
-        model, proba, fit_s, infer_s = fit_predict(name, subsample(train, args.max_train_rows), test)
+        model, proba, fit_s, infer_s = fit_predict(name, subsample(train, max_rows), test)
         t = evaluate(test, proba, args.data)
         joblib.dump({"model": model, "features": FEATURES}, f"artifacts/models/{name}.joblib")
+        save_loss_curve(name, model)
         summary.append({
             "model": name, "family": family,
             "config": json.dumps(model.get_params(deep=False), default=str)[:300],
@@ -142,6 +160,39 @@ def main():
     cols = ["model", "family", "cv_macro_f1", "cv_log_loss", "test_top1", "test_macro_f1",
             "test_log_loss", "test_continuity", "fit_s"]
     print("\n" + new_comp[cols].round(4).to_string(index=False))
+
+
+def save_loss_curve(name, model):
+    """Epoch-wise history, only for models that actually produce one (the MLP).
+    Training loss = log loss per epoch; validation = accuracy on the 10%
+    early-stopping split (that is what scikit-learn records)."""
+    est = model.steps[-1][1] if hasattr(model, "steps") else model
+    if not hasattr(est, "loss_curve_"):
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    hist = pd.DataFrame({"epoch": np.arange(1, len(est.loss_curve_) + 1),
+                         "train_loss": est.loss_curve_})
+    if getattr(est, "validation_scores_", None) is not None:
+        hist["val_accuracy"] = est.validation_scores_
+    hist.to_csv(f"results/{name}_training_history.csv", index=False)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.2))
+    axes[0].plot(hist["epoch"], hist["train_loss"], color="#2a78d6", linewidth=2)
+    axes[0].set_title(f"{name}: training loss per epoch", loc="left", fontsize=10)
+    if "val_accuracy" in hist:
+        axes[1].plot(hist["epoch"], hist["val_accuracy"], color="#2a78d6", linewidth=2)
+        axes[1].set_title(f"{name}: validation accuracy per epoch", loc="left", fontsize=10)
+    for ax in axes:
+        ax.set_xlabel("epoch")
+        ax.grid(color="#e5e4e0", linewidth=0.8)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(f"results/{name}_training_history.png", dpi=150)
+    plt.close(fig)
 
 
 def plot_comparison(comp: pd.DataFrame, path: str):
