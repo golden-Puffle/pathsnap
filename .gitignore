@@ -16,3 +16,6 @@ __pycache__/
 # Large intermediate files
 *.parquet
 !artifacts/*.parquet
+
+# Trained models (rf.joblib is 160 MB, over the GitHub limit); the final model is committed separately
+artifacts/models/
