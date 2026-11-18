@@ -1,0 +1,18 @@
+# Raw dataset (too large for git; see README for where to put it)
+data/
+data
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Large intermediate files
+*.parquet
+!artifacts/*.parquet
